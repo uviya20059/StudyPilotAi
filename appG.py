@@ -716,7 +716,7 @@ class GeminiError(RuntimeError):
         self.code = code
 
 
-def gemini_call(api_key, path, payload=None):
+def gemini_call(api_key, path, payload=None, timeout=35):
     headers = {"x-goog-api-key": api_key}
     data = None
     if payload is not None:
@@ -724,7 +724,7 @@ def gemini_call(api_key, path, payload=None):
         headers["content-type"] = "application/json"
     req = urllib.request.Request(f"{GEMINI_BASE}/{path}", data=data, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as err:
         raw = err.read().decode("utf-8", errors="ignore")
@@ -747,17 +747,18 @@ def gemini_call(api_key, path, payload=None):
         else:
             text = f"Gemini error {code}: {msg[:200]}"
         raise GeminiError(text, code) from None
-    except urllib.error.URLError as err:
-        raise GeminiError(f"Could not reach Gemini. Check your internet. ({err.reason})") from None
+    except (TimeoutError, urllib.error.URLError, OSError) as err:
+        reason = getattr(err, "reason", str(err) or "request timed out")
+        raise GeminiError(f"Gemini took too long to respond ({reason}).", code=504) from None
 
 
-def call_with_retry(api_key, path, payload=None, tries=3):
+def call_with_retry(api_key, path, payload=None, tries=2):
     for attempt in range(tries):
         try:
             return gemini_call(api_key, path, payload)
         except GeminiError as err:
             if err.code in (500, 503, 504) and attempt < tries - 1:
-                time.sleep(2 * (attempt + 1))
+                time.sleep(1)
                 continue
             raise
 
